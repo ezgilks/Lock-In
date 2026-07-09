@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import Optional
 
 from database import get_db
+from projections import apply_completion
 
 router = APIRouter(tags=["events"])
 
@@ -43,11 +44,14 @@ async def complete_habit(
     habit_id: int, body: CompleteHabitRequest, db: aiosqlite.Connection = Depends(get_db)
 ):
     cur = await db.execute(
-        "SELECT id FROM habits WHERE id = ? AND user_id = 1 AND archived_at IS NULL",
+        "SELECT category_id, base_xp FROM habits"
+        " WHERE id = ? AND user_id = 1 AND archived_at IS NULL",
         (habit_id,),
     )
-    if not await cur.fetchone():
+    habit = await cur.fetchone()
+    if not habit:
         raise HTTPException(status_code=404, detail="Habit not found")
+    category_id, base_xp = habit["category_id"], habit["base_xp"]
 
     # Fast path: this idempotency key was already processed, return the
     # original event instead of writing a duplicate.
@@ -61,7 +65,17 @@ async def complete_habit(
         return _row_to_event(existing)
 
     event_id = str(uuid.uuid4())
-    payload = json.dumps({"habit_id": habit_id, "client_timestamp": body.client_timestamp})
+    # Snapshot category_id/base_xp at completion time so replay (which
+    # reads these back out of the event, not off the current habit row)
+    # reproduces identical projections even if the habit is edited later.
+    payload = json.dumps(
+        {
+            "habit_id": habit_id,
+            "category_id": category_id,
+            "base_xp": base_xp,
+            "client_timestamp": body.client_timestamp,
+        }
+    )
 
     # BEGIN IMMEDIATE takes the write lock up front so the MAX(version)+1
     # read and the insert are atomic against concurrent completions from
@@ -77,6 +91,14 @@ async def complete_habit(
             (event_id, body.idempotency_key, payload, version),
         )
         row = await cur.fetchone()
+        await apply_completion(
+            db,
+            user_id=1,
+            category_id=category_id,
+            base_xp=base_xp,
+            event_date=row["server_timestamp"][:10],
+            event_version=version,
+        )
         await db.commit()
         return _row_to_event(row)
     except aiosqlite.IntegrityError:
