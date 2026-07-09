@@ -238,6 +238,13 @@ threshold.
 
 ## Next step for the next session
 
+Ended this session live-testing the frontend against the real dev
+`lock_in.db` (has a "Fitness" category with a "Gym" habit from earlier
+sessions) — it works, but user flagged the frontend still needs polish
+before moving to the next big feature. No specifics captured yet on what
+exactly felt rough; ask at the start of next session rather than assuming
+it's one of the items below.
+
 Reasonable next candidates, none prioritized yet:
 
 - **Category/habit management UI** — currently backend-only via curl;
